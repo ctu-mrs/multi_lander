@@ -1,0 +1,48 @@
+<launch>
+
+  <arg name="RUN_TYPE" default="$(env RUN_TYPE)" />
+  <arg name="UAV_NAME" default="$(optenv UAV_NAME uav)" />
+  <arg name="LOGGER_DEBUG" default="false" />
+
+    <!-- other args -->
+  <arg name="standalone" default="true" />
+  <arg name="debug" default="false" />
+  <arg name="custom_config" default="" />
+
+  <env name="ROSCONSOLE_CONFIG_FILE" if="$(eval arg('LOGGER_DEBUG'))" value="$(find multi_lander)/config/debug_verbosity.yaml" />
+
+  <arg     if="$(eval arg('standalone') or arg('debug'))" name="nodelet" value="standalone" />
+  <arg unless="$(eval arg('standalone') or arg('debug'))" name="nodelet" value="load" />
+  <arg     if="$(eval arg('standalone') or arg('debug'))" name="nodelet_manager" value="" />
+  <arg unless="$(eval arg('standalone') or arg('debug'))" name="nodelet_manager" value="$(arg UAV_NAME)_nodelet_manager" />
+
+  <arg     if="$(arg debug)" name="launch_prefix" value="debug_roslaunch" />
+  <arg unless="$(arg debug)" name="launch_prefix" value="" />
+
+  <group ns="$(arg UAV_NAME)">
+
+    <node pkg="nodelet" type="nodelet" name="multi_lander" args="$(arg nodelet) multi_lander/MultiLander $(arg nodelet_manager)" output="screen" launch-prefix="$(arg launch_prefix)">
+
+      <!-- Load the default param files -->
+      <rosparam file="$(find multi_lander)/config/multi_lander.yaml" />
+
+      <param name="uav_manager_diag_topic" value="uav_manager/diagnostics" />
+      <param name="control_manager_diag_topic" value="control_manager/diagnostics" />
+      <param name="land_home_service" value="uav_manager/land_home" />
+      <param name="switch_controller_service" value="control_manager/switch_controller" />
+      <param name="switch_tracker_service" value="control_manager/switch_tracker" />
+      <param name="set_constraints_service" value="constraint_manager/set_constrints" />
+
+      <rosparam if="$(eval arg('RUN_TYPE') == 'uav')" file="$(find mrs_uav_general)/config/uav_names.yaml" />
+      <rosparam if="$(eval arg('RUN_TYPE') == 'simulation')" file="$(find mrs_uav_general)/config/uav_names_simulation.yaml" />
+
+      <!-- Load a user param file -->
+      <rosparam if="$(eval not arg('custom_config') == '')" file="$(arg custom_config)" />
+
+      <!-- Subscribers -->
+
+    </node>
+
+  </group>
+
+</launch>

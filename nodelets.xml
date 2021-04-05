@@ -1,0 +1,5 @@
+<library path="lib/libMultiLander">
+  <class name="multi_lander/MultiLander" type="multi_lander::MultiLander" base_class_type="nodelet::Nodelet">
+    <description>MultiLander nodelet</description>
+  </class>
+</library>

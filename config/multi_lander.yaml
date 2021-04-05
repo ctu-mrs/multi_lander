@@ -1,0 +1,8 @@
+timer_main:
+  rate: 30.0 # [Hz]
+
+tracker: "MpcTracker"
+controller: "Se3Controller"
+constraints: "medium"
+
+service_n_attempts: 5

@@ -31,7 +31,8 @@
       <param name="land_home_service" value="uav_manager/land_home" />
       <param name="switch_controller_service" value="control_manager/switch_controller" />
       <param name="switch_tracker_service" value="control_manager/switch_tracker" />
-      <param name="set_constraints_service" value="constraint_manager/set_constrints" />
+      <param name="set_constraints_service" value="constraint_manager/set_constraints" />
+      <param name="enable_callbacks_service" value="control_manager/enable_callbacks" />
 
       <rosparam if="$(eval arg('RUN_TYPE') == 'uav')" file="$(find mrs_uav_general)/config/uav_names.yaml" />
       <rosparam if="$(eval arg('RUN_TYPE') == 'simulation')" file="$(find mrs_uav_general)/config/uav_names_simulation.yaml" />
@@ -40,6 +41,7 @@
       <rosparam if="$(eval not arg('custom_config') == '')" file="$(arg custom_config)" />
 
       <!-- Subscribers -->
+      <remap from="~next_in" to="~next" />
 
     </node>
 

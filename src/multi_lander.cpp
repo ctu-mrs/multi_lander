@@ -31,6 +31,7 @@
 
 using vec2_t = mrs_lib::geometry::vec_t<2>;
 using vec3_t = mrs_lib::geometry::vec_t<3>;
+using mat2_t = Eigen::Matrix2Xd;
 
 using radians  = mrs_lib::geometry::radians;
 using sradians = mrs_lib::geometry::sradians;
@@ -39,6 +40,16 @@ using sradians = mrs_lib::geometry::sradians;
 
 namespace multi_lander
 {
+
+/* defines //{ */
+
+typedef struct
+{
+  vec2_t from;
+  vec2_t to;
+} Segment_t;
+
+//}
 
 /* //{ class MultiLander */
 
@@ -75,9 +86,12 @@ public:
   std::vector<mrs_lib::ServiceClientHandler<mrs_msgs::String>>  sch_switch_controller_;
   std::vector<mrs_lib::ServiceClientHandler<mrs_msgs::String>>  sch_switch_tracker_;
   std::vector<mrs_lib::ServiceClientHandler<mrs_msgs::String>>  sch_set_constraints_;
+  std::vector<mrs_lib::ServiceClientHandler<std_srvs::SetBool>> sch_enable_callbacks_;
 
   std::vector<bool> was_flying_;
   std::mutex        mutex_was_flying_;
+
+  std::vector<bool> sent_home_;
 
   // timers
   ros::Timer timer_main_;
@@ -94,10 +108,18 @@ public:
   bool                                      switchTracker(const int& id);
   bool                                      switchController(const int& id);
   bool                                      setConstraints(const int& id);
+  bool                                      setCallbacks(const int& id, const bool& value);
   std::optional<std::tuple<double, double>> getHomePosition(const int& id);
   std::optional<std::tuple<double, double>> getCurrentPosition(const int& id);
-  std::optional<bool>                       isReady(const int& id);
+  bool                                      isReady(const int& id);
+  bool                                      flyingHome(const int& id);
   bool                                      isActive(const int& id);
+
+  double distFromSegment(const vec2_t& point, const vec2_t& seg1, const vec2_t& seg2);
+
+  int        last_sent_home_  = -1;
+  bool       uav_flying_home_ = false;
+  std::mutex mutex_last_sent_home_;
 };
 
 //}
@@ -116,6 +138,10 @@ void MultiLander::onInit() {
 
   param_loader.loadParam("timer_main/rate", _timer_main_rate_);
 
+  param_loader.loadParam("controller", _controller_);
+  param_loader.loadParam("tracker", _tracker_);
+  param_loader.loadParam("constraints", _constraints_);
+
   // params
   std::string uav_manager_diag_topic;
   std::string control_manager_diag_topic;
@@ -124,6 +150,7 @@ void MultiLander::onInit() {
   std::string switch_controller_service;
   std::string switch_tracker_service;
   std::string set_constraints_service;
+  std::string enable_callbacks_service;
 
   param_loader.loadParam("uav_manager_diag_topic", uav_manager_diag_topic);
   param_loader.loadParam("control_manager_diag_topic", control_manager_diag_topic);
@@ -131,6 +158,7 @@ void MultiLander::onInit() {
   param_loader.loadParam("switch_controller_service", switch_controller_service);
   param_loader.loadParam("switch_tracker_service", switch_tracker_service);
   param_loader.loadParam("set_constraints_service", set_constraints_service);
+  param_loader.loadParam("enable_callbacks_service", enable_callbacks_service);
 
   param_loader.loadParam("network/robot_names", _uav_names_);
 
@@ -159,6 +187,7 @@ void MultiLander::onInit() {
     std::string switch_controller_full_service = std::string("/") + name + std::string("/") + switch_controller_service;
     std::string switch_tracker_full_service    = std::string("/") + name + std::string("/") + switch_tracker_service;
     std::string set_constraints_full_service   = std::string("/") + name + std::string("/") + set_constraints_service;
+    std::string enable_callbacks_full_service  = std::string("/") + name + std::string("/") + enable_callbacks_service;
 
     ROS_INFO("[MultiLander]: subscribing to %s", uav_diag_full_topic.c_str());
     sh_uav_diags_.push_back(mrs_lib::SubscribeHandler<mrs_msgs::UavManagerDiagnostics>(shopts, uav_diag_full_topic));
@@ -178,12 +207,16 @@ void MultiLander::onInit() {
     ROS_INFO("[MultiLander]: hooking service to %s", set_constraints_full_service.c_str());
     sch_set_constraints_.push_back(mrs_lib::ServiceClientHandler<mrs_msgs::String>(nh_, set_constraints_full_service));
 
+    ROS_INFO("[MultiLander]: hooking service to %s", enable_callbacks_full_service.c_str());
+    sch_enable_callbacks_.push_back(mrs_lib::ServiceClientHandler<std_srvs::SetBool>(nh_, enable_callbacks_full_service));
+
     was_flying_.push_back(false);
+    sent_home_.push_back(false);
   }
 
   // | --------------------- service servers -------------------- |
 
-  service_server_next_ = nh_.advertiseService("next", &MultiLander::callbackNext, this);
+  service_server_next_ = nh_.advertiseService("next_in", &MultiLander::callbackNext, this);
 
   // | ------------------------- timers ------------------------- |
 
@@ -202,13 +235,46 @@ void MultiLander::onInit() {
 // |                          routines                          |
 // --------------------------------------------------------------
 
+/* distFromSegment() //{ */
+
+double MultiLander::distFromSegment(const vec2_t& point, const vec2_t& seg1, const vec2_t& seg2) {
+
+  vec2_t segment_vector = seg2 - seg1;
+  double segment_len    = segment_vector.norm();
+
+  vec2_t segment_vector_norm = segment_vector;
+  segment_vector_norm.normalize();
+
+  double point_coordinate = segment_vector_norm.dot(point - seg1);
+
+  if (point_coordinate < 0) {
+    return (point - seg1).norm();
+  } else if (point_coordinate > segment_len) {
+    return (point - seg2).norm();
+  } else {
+
+    mat2_t segment_projector = segment_vector_norm * segment_vector_norm.transpose();
+    vec2_t projection        = seg1 + segment_projector * (point - seg1);
+
+    return (point - projection).norm();
+  }
+}
+
+//}
+
 /* landHome() //{ */
 
 bool MultiLander::landHome(const int& id) {
 
   std_srvs::Trigger srv;
 
-  return sch_land_home_[id].call(srv, _service_n_attempts_);
+  bool success = sch_land_home_[id].call(srv, _service_n_attempts_);
+
+  if (!success) {
+    ROS_ERROR("[MultiLander]: land home for %s failed", _uav_names_[id].c_str());
+  }
+
+  return success;
 }
 
 //}
@@ -245,6 +311,18 @@ bool MultiLander::setConstraints(const int& id) {
   srv.request.value = _constraints_;
 
   return sch_set_constraints_[id].call(srv, _service_n_attempts_);
+}
+
+//}
+
+/* setCallbacks() //{ */
+
+bool MultiLander::setCallbacks(const int& id, const bool& value) {
+
+  std_srvs::SetBool srv;
+  srv.request.data = value;
+
+  return sch_enable_callbacks_[id].call(srv, _service_n_attempts_);
 }
 
 //}
@@ -314,21 +392,42 @@ bool MultiLander::isActive(const int& id) {
 
 /* isReady() //{ */
 
-std::optional<bool> MultiLander::isReady(const int& id) {
+bool MultiLander::isReady(const int& id) {
 
   if (!sh_control_diags_[id].hasMsg()) {
-    return {};
+    return false;
   }
 
   if ((ros::Time::now() - sh_control_diags_[id].lastMsgTime()).toSec() > 3.0) {
-    return {};
+    return false;
   }
 
   bool flying_normally     = sh_control_diags_[id].getMsg()->flying_normally;
   bool have_goal           = sh_control_diags_[id].getMsg()->tracker_status.have_goal;
   bool tracking_trajectory = sh_control_diags_[id].getMsg()->tracker_status.tracking_trajectory;
+  bool sent_home           = sent_home_[id];
 
-  return flying_normally && !have_goal && !tracking_trajectory;
+  return flying_normally && !have_goal && !tracking_trajectory && !sent_home;
+}
+
+//}
+
+/* flyingHome() //{ */
+
+bool MultiLander::flyingHome(const int& id) {
+
+  if (!sh_control_diags_[id].hasMsg()) {
+    return false;
+  }
+
+  if ((ros::Time::now() - sh_control_diags_[id].lastMsgTime()).toSec() > 3.0) {
+    return false;
+  }
+
+  bool have_goal      = sh_control_diags_[id].getMsg()->tracker_status.have_goal;
+  bool tracker_active = sh_control_diags_[id].getMsg()->active_tracker == _tracker_;
+
+  return have_goal && tracker_active;
 }
 
 //}
@@ -346,25 +445,22 @@ void MultiLander::timerMain([[maybe_unused]] const ros::TimerEvent& event) {
 
   ROS_INFO_ONCE("[MultiLander]: timerMain() spinning");
 
-  for (size_t i; i < size(_uav_names_); i++) {
+  {
+    std::scoped_lock lock(mutex_was_flying_);
 
-    if (isActive(i)) {
+    for (size_t i = 0; i < _uav_names_.size(); i++) {
 
-      std::scoped_lock lock(mutex_was_flying_);
-      was_flying_[i] = true;
+      if (!was_flying_[i] && isActive(i)) {
 
-      ROS_INFO("[MultiLander]: %s is active", _uav_names_[i].c_str());
+        was_flying_[i] = true;
+
+        ROS_INFO("[MultiLander]: %s is active", _uav_names_[i].c_str());
+      }
     }
   }
 }
 
 //}
-
-// --------------------------------------------------------------
-// |                          callbacks                         |
-// --------------------------------------------------------------
-
-// | --------------------- topic callbacks -------------------- |
 
 // | -------------------- service callbacks ------------------- |
 
@@ -375,11 +471,182 @@ bool MultiLander::callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req,
   if (!is_initialized_)
     return false;
 
+  std::stringstream ss;
+
+  auto uav_flying_home = mrs_lib::get_mutexed(mutex_last_sent_home_, uav_flying_home_);
+  auto last_sent_home  = mrs_lib::get_mutexed(mutex_last_sent_home_, last_sent_home_);
+
+  if (uav_flying_home) {
+
+    if (!flyingHome(last_sent_home)) {
+
+      ROS_INFO("[MultiLander]: %s is home", _uav_names_[last_sent_home].c_str());
+
+      uav_flying_home_ = false;
+    }
+  }
+
+  if (uav_flying_home) {
+
+    ss << "waiting for " << _uav_names_[last_sent_home].c_str() << " to get home";
+    res.message = ss.str();
+    res.success = false;
+    ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
+
+    return true;
+  }
+
+  // | ----------------- find the active uav ids ---------------- |
+
+  std::vector<int> active_uavs;
+
+  /* get active uavs //{ */
+
+  for (size_t i = 0; i < _uav_names_.size(); i++) {
+
+    if (was_flying_[i] && isActive(i) && isReady(i)) {
+      active_uavs.push_back(i);
+    }
+  }
+
+  //}
+
+  // | ---------------- build the homing segments --------------- |
+
+  std::vector<Segment_t> homing_segments;
+
+  /* build homing segments //{ */
+
+  for (size_t uav = 0; uav < active_uavs.size(); uav++) {
+
+    int uav_id = active_uavs[uav];
+
+    double xh = 0;
+    double yh = 0;
+    double x  = 0;
+    double y  = 0;
+
+    auto home = getHomePosition(uav_id);
+
+    if (home) {
+      std::tie(xh, yh) = home.value();
+    } else {
+      ss << "could not get home position for " << _uav_names_[uav_id].c_str();
+      res.message = ss.str();
+      res.success = false;
+      ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
+      return true;
+    }
+
+    auto cur = getCurrentPosition(uav_id);
+
+    if (cur) {
+      std::tie(x, y) = cur.value();
+    } else {
+      ss << "could not get current position for " << _uav_names_[uav_id].c_str();
+      res.message = ss.str();
+      res.success = false;
+      ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
+      return true;
+    }
+
+    ROS_INFO("[MultiLander]: %s: home: %.2f, %.2f, current %.2f, %.2f", _uav_names_[uav_id].c_str(), xh, yh, x, y);
+
+    Segment_t segment;
+    segment.from[0] = x;
+    segment.from[1] = y;
+    segment.to[0]   = xh;
+    segment.to[1]   = yh;
+
+    homing_segments.push_back(segment);
+  }
+
+  //}
+
+  // | ----- find distances betwen homing segments and uavs ----- |
+
+  std::vector<double> uavs_distances;
+
+  /* find distances //{ */
+
+  for (size_t uav = 0; uav < active_uavs.size(); uav++) {
+
+    int uav_id = active_uavs[uav];
+
+    double min_distance = std::numeric_limits<double>::max();
+
+    for (size_t other = 0; other < active_uavs.size(); other++) {
+
+      int other_id = active_uavs[other];
+
+      if (uav_id != other_id) {
+
+        // get the distance of the other UAV to this UAV's homing segment
+        const double distance = distFromSegment(homing_segments[other].from, homing_segments[uav].from, homing_segments[uav].to);
+
+        ROS_INFO("[MultiLander]: %s segment vs %s = %.2f", _uav_names_[uav].c_str(), _uav_names_[other].c_str(), distance);
+
+        if (distance < min_distance) {
+          min_distance = distance;
+        }
+      }
+    }
+
+    uavs_distances.push_back(min_distance);
+  }
+
+  //}
+
+  // | --------- find the UAV with the largest distance --------- |
+
+  double max_distance     = std::numeric_limits<double>::lowest();
+  int    candidate_uav_id = -1;
+
+  for (size_t i = 0; i < active_uavs.size(); i++) {
+
+    if (uavs_distances[i] > max_distance) {
+      max_distance     = uavs_distances[i];
+      candidate_uav_id = active_uavs[i];
+    }
+  }
+
+  if (candidate_uav_id >= 0) {
+
+    ROS_INFO("[MultiLander]: landing with %s, min distance %.2f", _uav_names_[candidate_uav_id].c_str(), max_distance);
+
+    switchTracker(candidate_uav_id);
+
+    ros::Duration(0.1).sleep();
+
+    switchController(candidate_uav_id);
+
+    ros::Duration(0.1).sleep();
+
+    setConstraints(candidate_uav_id);
+
+    ros::Duration(0.1).sleep();
+
+    landHome(candidate_uav_id);
+
+    sent_home_[candidate_uav_id] = true;
+
+    {
+      std::scoped_lock lock(mutex_last_sent_home_);
+
+      uav_flying_home_ = true;
+      last_sent_home_  = candidate_uav_id;
+    }
+
+  } else {
+    ROS_ERROR("[MultiLander]: did not find UAV to land home");
+  }
+
+  res.message = "yes";
+  res.success = true;
   return true;
 }
 
 //}
-
 
 }  // namespace multi_lander
 

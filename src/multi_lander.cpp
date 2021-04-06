@@ -67,6 +67,7 @@ public:
   std::string _tracker_;
   std::string _constraints_;
   std::string _controller_;
+  std::string _altitude_estimator_;
 
   // subscribers
   std::vector<mrs_lib::SubscribeHandler<mrs_msgs::UavManagerDiagnostics>>     sh_uav_diags_;
@@ -87,6 +88,7 @@ public:
   std::vector<mrs_lib::ServiceClientHandler<mrs_msgs::String>>  sch_switch_tracker_;
   std::vector<mrs_lib::ServiceClientHandler<mrs_msgs::String>>  sch_set_constraints_;
   std::vector<mrs_lib::ServiceClientHandler<std_srvs::SetBool>> sch_enable_callbacks_;
+  std::vector<mrs_lib::ServiceClientHandler<mrs_msgs::String>>  sch_change_alt_estimator_;
 
   std::vector<bool> was_flying_;
   std::mutex        mutex_was_flying_;
@@ -108,6 +110,7 @@ public:
   bool                                      switchTracker(const int& id);
   bool                                      switchController(const int& id);
   bool                                      setConstraints(const int& id);
+  bool                                      changeAltEstimator(const int& id);
   bool                                      setCallbacks(const int& id, const bool& value);
   std::optional<std::tuple<double, double>> getHomePosition(const int& id);
   std::optional<std::tuple<double, double>> getCurrentPosition(const int& id);
@@ -141,6 +144,7 @@ void MultiLander::onInit() {
   param_loader.loadParam("controller", _controller_);
   param_loader.loadParam("tracker", _tracker_);
   param_loader.loadParam("constraints", _constraints_);
+  param_loader.loadParam("altitude_estimator", _altitude_estimator_);
 
   // params
   std::string uav_manager_diag_topic;
@@ -151,6 +155,7 @@ void MultiLander::onInit() {
   std::string switch_tracker_service;
   std::string set_constraints_service;
   std::string enable_callbacks_service;
+  std::string change_alt_estimator_service;
 
   param_loader.loadParam("uav_manager_diag_topic", uav_manager_diag_topic);
   param_loader.loadParam("control_manager_diag_topic", control_manager_diag_topic);
@@ -159,6 +164,7 @@ void MultiLander::onInit() {
   param_loader.loadParam("switch_tracker_service", switch_tracker_service);
   param_loader.loadParam("set_constraints_service", set_constraints_service);
   param_loader.loadParam("enable_callbacks_service", enable_callbacks_service);
+  param_loader.loadParam("change_alt_estimator_service", change_alt_estimator_service);
 
   param_loader.loadParam("network/robot_names", _uav_names_);
 
@@ -181,13 +187,14 @@ void MultiLander::onInit() {
   // create subscribers for uav topics
   for (const auto& name : _uav_names_) {
 
-    std::string uav_diag_full_topic            = std::string("/") + name + std::string("/") + uav_manager_diag_topic;
-    std::string control_diag_full_topic        = std::string("/") + name + std::string("/") + control_manager_diag_topic;
-    std::string land_home_full_service         = std::string("/") + name + std::string("/") + land_home_service;
-    std::string switch_controller_full_service = std::string("/") + name + std::string("/") + switch_controller_service;
-    std::string switch_tracker_full_service    = std::string("/") + name + std::string("/") + switch_tracker_service;
-    std::string set_constraints_full_service   = std::string("/") + name + std::string("/") + set_constraints_service;
-    std::string enable_callbacks_full_service  = std::string("/") + name + std::string("/") + enable_callbacks_service;
+    std::string uav_diag_full_topic               = std::string("/") + name + std::string("/") + uav_manager_diag_topic;
+    std::string control_diag_full_topic           = std::string("/") + name + std::string("/") + control_manager_diag_topic;
+    std::string land_home_full_service            = std::string("/") + name + std::string("/") + land_home_service;
+    std::string switch_controller_full_service    = std::string("/") + name + std::string("/") + switch_controller_service;
+    std::string switch_tracker_full_service       = std::string("/") + name + std::string("/") + switch_tracker_service;
+    std::string set_constraints_full_service      = std::string("/") + name + std::string("/") + set_constraints_service;
+    std::string enable_callbacks_full_service     = std::string("/") + name + std::string("/") + enable_callbacks_service;
+    std::string change_alt_estimator_full_service = std::string("/") + name + std::string("/") + change_alt_estimator_service;
 
     ROS_INFO("[MultiLander]: subscribing to %s", uav_diag_full_topic.c_str());
     sh_uav_diags_.push_back(mrs_lib::SubscribeHandler<mrs_msgs::UavManagerDiagnostics>(shopts, uav_diag_full_topic));
@@ -209,6 +216,9 @@ void MultiLander::onInit() {
 
     ROS_INFO("[MultiLander]: hooking service to %s", enable_callbacks_full_service.c_str());
     sch_enable_callbacks_.push_back(mrs_lib::ServiceClientHandler<std_srvs::SetBool>(nh_, enable_callbacks_full_service));
+
+    ROS_INFO("[MultiLander]: hooking service to %s", change_alt_estimator_full_service.c_str());
+    sch_change_alt_estimator_.push_back(mrs_lib::ServiceClientHandler<mrs_msgs::String>(nh_, change_alt_estimator_full_service));
 
     was_flying_.push_back(false);
     sent_home_.push_back(false);
@@ -311,6 +321,18 @@ bool MultiLander::setConstraints(const int& id) {
   srv.request.value = _constraints_;
 
   return sch_set_constraints_[id].call(srv, _service_n_attempts_);
+}
+
+//}
+
+/* changeAltEstimator() //{ */
+
+bool MultiLander::changeAltEstimator(const int& id) {
+
+  mrs_msgs::String srv;
+  srv.request.value = _altitude_estimator_;
+
+  return sch_change_alt_estimator_[id].call(srv, _service_n_attempts_);
 }
 
 //}
@@ -623,6 +645,10 @@ bool MultiLander::callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req,
     ros::Duration(0.1).sleep();
 
     setConstraints(candidate_uav_id);
+
+    ros::Duration(0.1).sleep();
+
+    changeAltEstimator(candidate_uav_id);
 
     ros::Duration(0.1).sleep();
 

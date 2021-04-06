@@ -33,6 +33,7 @@
       <param name="switch_tracker_service" value="control_manager/switch_tracker" />
       <param name="set_constraints_service" value="constraint_manager/set_constraints" />
       <param name="enable_callbacks_service" value="control_manager/enable_callbacks" />
+      <param name="change_alt_estimator_service" value="odometry/change_alt_estimator_type_string" />
 
       <rosparam if="$(eval arg('RUN_TYPE') == 'uav')" file="$(find mrs_uav_general)/config/uav_names.yaml" />
       <rosparam if="$(eval arg('RUN_TYPE') == 'simulation')" file="$(find mrs_uav_general)/config/uav_names_simulation.yaml" />

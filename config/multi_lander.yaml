@@ -4,5 +4,6 @@ timer_main:
 tracker: "MpcTracker"
 controller: "Se3Controller"
 constraints: "medium"
+altitude_estimator: "height"
 
 service_n_attempts: 5

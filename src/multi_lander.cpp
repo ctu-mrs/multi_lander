@@ -68,6 +68,7 @@ public:
   std::string _constraints_;
   std::string _controller_;
   std::string _altitude_estimator_;
+  double      _min_distance_before_landing_;
 
   // subscribers
   std::vector<mrs_lib::SubscribeHandler<mrs_msgs::UavManagerDiagnostics>>     sh_uav_diags_;
@@ -145,6 +146,7 @@ void MultiLander::onInit() {
   param_loader.loadParam("tracker", _tracker_);
   param_loader.loadParam("constraints", _constraints_);
   param_loader.loadParam("altitude_estimator", _altitude_estimator_);
+  param_loader.loadParam("min_distance_before_landing", _min_distance_before_landing_);
 
   // params
   std::string uav_manager_diag_topic;
@@ -508,16 +510,6 @@ bool MultiLander::callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req,
     }
   }
 
-  if (uav_flying_home) {
-
-    ss << "waiting for " << _uav_names_[last_sent_home].c_str() << " to get home";
-    res.message = ss.str();
-    res.success = false;
-    ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
-
-    return true;
-  }
-
   // | ----------------- find the active uav ids ---------------- |
 
   std::vector<int> active_uavs;
@@ -532,6 +524,14 @@ bool MultiLander::callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req,
   }
 
   //}
+
+  if (active_uavs.size() == 0) {
+    ss << "no UAVs are flying";
+    res.message = ss.str();
+    res.success = false;
+    ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
+    return true;
+  }
 
   // | ---------------- build the homing segments --------------- |
 
@@ -629,6 +629,50 @@ bool MultiLander::callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req,
     if (uavs_distances[i] > max_distance) {
       max_distance     = uavs_distances[i];
       candidate_uav_id = active_uavs[i];
+    }
+  }
+
+  if (uav_flying_home) {
+
+    double last_x, last_y;
+    double cur_x, cur_y;
+
+    {
+      auto result = getCurrentPosition(last_sent_home);
+
+      if (result) {
+        std::tie(last_x, last_y) = result.value();
+      } else {
+        ss << "could not get current position for " << _uav_names_[last_sent_home].c_str();
+        res.message = ss.str();
+        res.success = false;
+        ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
+        return true;
+      }
+    }
+
+    {
+      auto result = getCurrentPosition(candidate_uav_id);
+
+      if (result) {
+        std::tie(cur_x, cur_y) = result.value();
+      } else {
+        ss << "could not get current position for " << _uav_names_[candidate_uav_id].c_str();
+        res.message = ss.str();
+        res.success = false;
+        ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
+        return true;
+      }
+    }
+
+    if (flyingHome(last_sent_home) && sqrt(pow(last_x - cur_x, 2) + pow(last_y - cur_y, 2)) < _min_distance_before_landing_) {
+
+      ss << "waiting for " << _uav_names_[last_sent_home].c_str() << " to get home";
+      res.message = ss.str();
+      res.success = false;
+      ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
+
+      return true;
     }
   }
 

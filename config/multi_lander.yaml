@@ -1,5 +1,5 @@
 timer_main:
-  rate: 30.0 # [Hz]
+  rate: 5.0 # [Hz]
 
 tracker: "MpcTracker"
 controller: "Se3Controller"

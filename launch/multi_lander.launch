@@ -42,7 +42,12 @@
       <rosparam if="$(eval not arg('custom_config') == '')" file="$(arg custom_config)" />
 
       <!-- Subscribers -->
-      <remap from="~next_in" to="~next" />
+      <remap from="~land_one_in" to="~land_one" />
+      <remap from="~land_all_in" to="~land_all" />
+
+      <!-- Publisher -->
+      <remap from="~status_string_out" to="mrs_uav_status/display_string" />
+      <remap from="~service_string_out" to="mrs_uav_status/set_trigger_service" />
 
     </node>
 

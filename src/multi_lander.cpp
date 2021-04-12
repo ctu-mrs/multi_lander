@@ -9,6 +9,8 @@
 
 #include <sensor_msgs/NavSatFix.h>
 
+#include <std_msgs/String.h>
+
 #include <mrs_msgs/UavManagerDiagnostics.h>
 #include <mrs_msgs/ControlManagerDiagnostics.h>
 #include <mrs_msgs/String.h>
@@ -23,7 +25,9 @@
 #include <mrs_lib/quadratic_thrust_model.h>
 #include <mrs_lib/service_client_handler.h>
 #include <mrs_lib/gps_conversions.h>
+
 #include <tuple>
+#include <utility>
 
 //}
 
@@ -70,18 +74,23 @@ public:
   std::string _altitude_estimator_;
   double      _min_distance_before_landing_;
 
+  std::atomic<bool> landing_all_ = false;
+
   // subscribers
   std::vector<mrs_lib::SubscribeHandler<mrs_msgs::UavManagerDiagnostics>>     sh_uav_diags_;
   std::vector<mrs_lib::SubscribeHandler<mrs_msgs::ControlManagerDiagnostics>> sh_control_diags_;
 
   // publishers
-  ros::Publisher publisher_flight_time_;
+  ros::Publisher publisher_status_string_;
+  ros::Publisher publisher_status_service_;
 
   // service servers
-  ros::ServiceServer service_server_next_;
+  ros::ServiceServer service_server_one_;
+  ros::ServiceServer service_server_all_;
 
   // service callbacks
   bool callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res);
+  bool callbackAll([[maybe_unused]] std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res);
 
   // service clients
   std::vector<mrs_lib::ServiceClientHandler<std_srvs::Trigger>> sch_land_home_;
@@ -124,6 +133,8 @@ public:
   int        last_sent_home_  = -1;
   bool       uav_flying_home_ = false;
   std::mutex mutex_last_sent_home_;
+
+  std::pair<std::string, bool> landOne(void);
 };
 
 //}
@@ -228,11 +239,17 @@ void MultiLander::onInit() {
 
   // | --------------------- service servers -------------------- |
 
-  service_server_next_ = nh_.advertiseService("next_in", &MultiLander::callbackNext, this);
+  service_server_one_ = nh_.advertiseService("land_one_in", &MultiLander::callbackNext, this);
+  service_server_all_ = nh_.advertiseService("land_all_in", &MultiLander::callbackAll, this);
 
   // | ------------------------- timers ------------------------- |
 
   timer_main_ = nh_.createTimer(ros::Rate(_timer_main_rate_), &MultiLander::timerMain, this);
+
+  // | ------------------------ publisher ----------------------- |
+
+  publisher_status_string_  = nh_.advertise<std_msgs::String>("status_string_out", 1);
+  publisher_status_service_ = nh_.advertise<std_msgs::String>("service_string_out", 1);
 
   // | ----------------------- finish init ---------------------- |
 
@@ -426,12 +443,12 @@ bool MultiLander::isReady(const int& id) {
     return false;
   }
 
-  bool flying_normally     = sh_control_diags_[id].getMsg()->flying_normally;
+  bool motors              = sh_control_diags_[id].getMsg()->motors;
   bool have_goal           = sh_control_diags_[id].getMsg()->tracker_status.have_goal;
   bool tracking_trajectory = sh_control_diags_[id].getMsg()->tracker_status.tracking_trajectory;
   bool sent_home           = sent_home_[id];
 
-  return flying_normally && !have_goal && !tracking_trajectory && !sent_home;
+  return motors && !have_goal && !tracking_trajectory && !sent_home;
 }
 
 //}
@@ -444,7 +461,7 @@ bool MultiLander::flyingHome(const int& id) {
     return false;
   }
 
-  if ((ros::Time::now() - sh_control_diags_[id].lastMsgTime()).toSec() > 3.0) {
+  if ((ros::Time::now() - sh_control_diags_[id].lastMsgTime()).toSec() > 5.0) {
     return false;
   }
 
@@ -456,44 +473,9 @@ bool MultiLander::flyingHome(const int& id) {
 
 //}
 
-// --------------------------------------------------------------
-// |                           timers                           |
-// --------------------------------------------------------------
+/* landOne() //{ */
 
-/* //{ timerMain() */
-
-void MultiLander::timerMain([[maybe_unused]] const ros::TimerEvent& event) {
-
-  if (!is_initialized_)
-    return;
-
-  ROS_INFO_ONCE("[MultiLander]: timerMain() spinning");
-
-  {
-    std::scoped_lock lock(mutex_was_flying_);
-
-    for (size_t i = 0; i < _uav_names_.size(); i++) {
-
-      if (!was_flying_[i] && isActive(i)) {
-
-        was_flying_[i] = true;
-
-        ROS_INFO("[MultiLander]: %s is active", _uav_names_[i].c_str());
-      }
-    }
-  }
-}
-
-//}
-
-// | -------------------- service callbacks ------------------- |
-
-/* //{ callbackNext() */
-
-bool MultiLander::callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res) {
-
-  if (!is_initialized_)
-    return false;
+std::pair<std::string, bool> MultiLander::landOne(void) {
 
   std::stringstream ss;
 
@@ -527,10 +509,9 @@ bool MultiLander::callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req,
 
   if (active_uavs.size() == 0) {
     ss << "no UAVs are flying";
-    res.message = ss.str();
-    res.success = false;
+
     ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
-    return true;
+    return std::make_pair(ss.str(), false);
   }
 
   // | ---------------- build the homing segments --------------- |
@@ -554,10 +535,8 @@ bool MultiLander::callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req,
       std::tie(xh, yh) = home.value();
     } else {
       ss << "could not get home position for " << _uav_names_[uav_id].c_str();
-      res.message = ss.str();
-      res.success = false;
       ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
-      return true;
+      return std::make_pair(ss.str(), false);
     }
 
     auto cur = getCurrentPosition(uav_id);
@@ -566,10 +545,8 @@ bool MultiLander::callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req,
       std::tie(x, y) = cur.value();
     } else {
       ss << "could not get current position for " << _uav_names_[uav_id].c_str();
-      res.message = ss.str();
-      res.success = false;
       ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
-      return true;
+      return std::make_pair(ss.str(), false);
     }
 
     ROS_INFO("[MultiLander]: %s: home: %.2f, %.2f, current %.2f, %.2f", _uav_names_[uav_id].c_str(), xh, yh, x, y);
@@ -644,10 +621,8 @@ bool MultiLander::callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req,
         std::tie(last_x, last_y) = result.value();
       } else {
         ss << "could not get current position for " << _uav_names_[last_sent_home].c_str();
-        res.message = ss.str();
-        res.success = false;
         ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
-        return true;
+        return std::make_pair(ss.str(), false);
       }
     }
 
@@ -658,27 +633,26 @@ bool MultiLander::callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req,
         std::tie(cur_x, cur_y) = result.value();
       } else {
         ss << "could not get current position for " << _uav_names_[candidate_uav_id].c_str();
-        res.message = ss.str();
-        res.success = false;
         ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
-        return true;
+        return std::make_pair(ss.str(), false);
       }
     }
 
     if (flyingHome(last_sent_home) && sqrt(pow(last_x - cur_x, 2) + pow(last_y - cur_y, 2)) < _min_distance_before_landing_) {
 
       ss << "waiting for " << _uav_names_[last_sent_home].c_str() << " to get home";
-      res.message = ss.str();
-      res.success = false;
       ROS_ERROR_STREAM("[MultiLander]: Failed: " << ss.str());
-
-      return true;
+      return std::make_pair(ss.str(), false);
     }
   }
 
   if (candidate_uav_id >= 0) {
 
     ROS_INFO("[MultiLander]: landing with %s, min distance %.2f", _uav_names_[candidate_uav_id].c_str(), max_distance);
+
+    setCallbacks(candidate_uav_id, true);
+
+    ros::Duration(0.1).sleep();
 
     switchTracker(candidate_uav_id);
 
@@ -711,9 +685,134 @@ bool MultiLander::callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req,
     ROS_ERROR("[MultiLander]: did not find UAV to land home");
   }
 
-  res.message = "yes";
-  res.success = true;
+  return std::make_pair("sucess", true);
+}
+
+//}
+
+// --------------------------------------------------------------
+// |                           timers                           |
+// --------------------------------------------------------------
+
+/* //{ timerMain() */
+
+void MultiLander::timerMain([[maybe_unused]] const ros::TimerEvent& event) {
+
+  if (!is_initialized_)
+    return;
+
+  ROS_INFO_ONCE("[MultiLander]: timerMain() spinning");
+
+  if (landing_all_) {
+
+    auto [message, success] = landOne();
+
+    if (success) {
+      ROS_INFO("[MultiLander]: sent one uav home");
+    } else {
+      ROS_INFO("[MultiLander]: did NOT sent one uav home: '%s'", message.c_str());
+    }
+
+    ros::Duration(3.0).sleep();
+  }
+
+  {
+    std::scoped_lock lock(mutex_was_flying_);
+
+    for (size_t i = 0; i < _uav_names_.size(); i++) {
+
+      if (!was_flying_[i] && isActive(i)) {
+
+        was_flying_[i] = true;
+
+        ROS_INFO("[MultiLander]: %s is active", _uav_names_[i].c_str());
+      }
+    }
+  }
+
+  // | --------- display the managed uavs in mrs_status --------- |
+
+  {
+
+    std::string uavs = "";
+
+    for (size_t i = 0; i < was_flying_.size(); i++) {
+
+      if (was_flying_[i]) {
+
+        uavs += _uav_names_[i];
+
+        if (i < (was_flying_.size() - 1)) {
+          uavs += " ";
+        }
+      }
+    }
+
+    std_msgs::String msg;
+    msg.data = uavs;
+
+    try {
+      publisher_status_string_.publish(msg);
+    }
+    catch (...) {
+      ROS_ERROR("exception caught during publishing topic '%s'", publisher_status_string_.getTopic().c_str());
+    }
+  }
+
+  // | ---------------- set the trigger services ---------------- |
+
+  {
+
+    std_msgs::String msg;
+    msg.data = "multi_lander/land_one";
+
+    try {
+      publisher_status_service_.publish(msg);
+    }
+    catch (...) {
+      ROS_ERROR("exception caught during publishing topic '%s'", publisher_status_service_.getTopic().c_str());
+    }
+
+    msg.data = "multi_lander/land_all";
+
+    try {
+      publisher_status_service_.publish(msg);
+    }
+    catch (...) {
+      ROS_ERROR("exception caught during publishing topic '%s'", publisher_status_service_.getTopic().c_str());
+    }
+  }
+}
+
+//}
+
+// | -------------------- service callbacks ------------------- |
+
+/* //{ callbackNext() */
+
+bool MultiLander::callbackNext([[maybe_unused]] std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res) {
+
+  if (!is_initialized_)
+    return false;
+
+  auto [message, success] = landOne();
+
+  res.message = message;
+  res.success = success;
+
   return true;
+}
+
+//}
+
+/* //{ callbackAll() */
+
+bool MultiLander::callbackAll([[maybe_unused]] std_srvs::Trigger::Request& req, std_srvs::Trigger::Response& res) {
+
+  if (!is_initialized_)
+    return false;
+
+  landing_all_ = true;
 }
 
 //}

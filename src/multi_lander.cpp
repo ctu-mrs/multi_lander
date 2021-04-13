@@ -733,6 +733,7 @@ void MultiLander::timerMain([[maybe_unused]] const ros::TimerEvent& event) {
   // | --------- display the managed uavs in mrs_status --------- |
 
   {
+    std::scoped_lock lock(mutex_was_flying_);
 
     std::string uavs = "";
 
@@ -812,7 +813,26 @@ bool MultiLander::callbackAll([[maybe_unused]] std_srvs::Trigger::Request& req, 
   if (!is_initialized_)
     return false;
 
+  {
+    std::scoped_lock lock(mutex_was_flying_);
+
+    std::string uavs = "";
+
+    for (size_t i = 0; i < was_flying_.size(); i++) {
+
+      if (was_flying_[i]) {
+
+        setCallbacks(i, false);
+      }
+    }
+  }
+
   landing_all_ = true;
+
+  res.message = "sending my birds home";
+  res.success = true;
+
+  return true;
 }
 
 //}

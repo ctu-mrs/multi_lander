@@ -66,7 +66,8 @@ private:
 public:
   virtual void onInit();
 
-  int _service_n_attempts_;
+  int    _service_n_attempts_;
+  double _service_repeat_delay_;
 
   std::string _tracker_;
   std::string _constraints_;
@@ -158,6 +159,9 @@ void MultiLander::onInit() {
   param_loader.loadParam("constraints", _constraints_);
   param_loader.loadParam("altitude_estimator", _altitude_estimator_);
   param_loader.loadParam("min_distance_before_landing", _min_distance_before_landing_);
+
+  param_loader.loadParam("service_n_attempts", _service_n_attempts_);
+  param_loader.loadParam("service_repeat_delay", _service_repeat_delay_);
 
   // params
   std::string uav_manager_diag_topic;
@@ -297,7 +301,7 @@ bool MultiLander::landHome(const int& id) {
 
   std_srvs::Trigger srv;
 
-  bool success = sch_land_home_[id].call(srv, _service_n_attempts_);
+  bool success = sch_land_home_[id].call(srv, _service_n_attempts_, _service_repeat_delay_);
 
   if (!success) {
     ROS_ERROR("[MultiLander]: land home for %s failed", _uav_names_[id].c_str());
@@ -315,7 +319,7 @@ bool MultiLander::switchTracker(const int& id) {
   mrs_msgs::String srv;
   srv.request.value = _tracker_;
 
-  return sch_switch_tracker_[id].call(srv, _service_n_attempts_);
+  return sch_switch_tracker_[id].call(srv, _service_n_attempts_, _service_repeat_delay_);
 }
 
 //}
@@ -327,7 +331,7 @@ bool MultiLander::switchController(const int& id) {
   mrs_msgs::String srv;
   srv.request.value = _controller_;
 
-  return sch_switch_controller_[id].call(srv, _service_n_attempts_);
+  return sch_switch_controller_[id].call(srv, _service_n_attempts_, _service_repeat_delay_);
 }
 
 //}
@@ -339,7 +343,7 @@ bool MultiLander::setConstraints(const int& id) {
   mrs_msgs::String srv;
   srv.request.value = _constraints_;
 
-  return sch_set_constraints_[id].call(srv, _service_n_attempts_);
+  return sch_set_constraints_[id].call(srv, _service_n_attempts_, _service_repeat_delay_);
 }
 
 //}
@@ -351,7 +355,7 @@ bool MultiLander::changeAltEstimator(const int& id) {
   mrs_msgs::String srv;
   srv.request.value = _altitude_estimator_;
 
-  return sch_change_alt_estimator_[id].call(srv, _service_n_attempts_);
+  return sch_change_alt_estimator_[id].call(srv, _service_n_attempts_, _service_repeat_delay_);
 }
 
 //}
@@ -363,7 +367,7 @@ bool MultiLander::setCallbacks(const int& id, const bool& value) {
   std_srvs::SetBool srv;
   srv.request.data = value;
 
-  return sch_enable_callbacks_[id].call(srv, _service_n_attempts_);
+  return sch_enable_callbacks_[id].call(srv, _service_n_attempts_, _service_repeat_delay_);
 }
 
 //}
@@ -376,7 +380,7 @@ std::optional<std::tuple<double, double>> MultiLander::getHomePosition(const int
     return {};
   }
 
-  if ((ros::Time::now() - sh_uav_diags_[id].lastMsgTime()).toSec() > 3.0) {
+  if ((ros::Time::now() - sh_uav_diags_[id].lastMsgTime()).toSec() > 10.0) {
     return {};
   }
 
@@ -400,7 +404,7 @@ std::optional<std::tuple<double, double>> MultiLander::getCurrentPosition(const 
     return {};
   }
 
-  if ((ros::Time::now() - sh_uav_diags_[id].lastMsgTime()).toSec() > 3.0) {
+  if ((ros::Time::now() - sh_uav_diags_[id].lastMsgTime()).toSec() > 10.0) {
     return {};
   }
 
@@ -439,7 +443,7 @@ bool MultiLander::isReady(const int& id) {
     return false;
   }
 
-  if ((ros::Time::now() - sh_control_diags_[id].lastMsgTime()).toSec() > 3.0) {
+  if ((ros::Time::now() - sh_control_diags_[id].lastMsgTime()).toSec() > 10.0) {
     return false;
   }
 
@@ -461,7 +465,7 @@ bool MultiLander::flyingHome(const int& id) {
     return false;
   }
 
-  if ((ros::Time::now() - sh_control_diags_[id].lastMsgTime()).toSec() > 5.0) {
+  if ((ros::Time::now() - sh_control_diags_[id].lastMsgTime()).toSec() > 10.0) {
     return false;
   }
 

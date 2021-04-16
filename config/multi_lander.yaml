@@ -8,4 +8,5 @@ altitude_estimator: "height"
 
 min_distance_before_landing: 15.0 # [m]
 
-service_n_attempts: 5
+service_n_attempts: 30
+service_repeat_delay: 0.1

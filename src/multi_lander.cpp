@@ -827,6 +827,7 @@ bool MultiLander::callbackAll([[maybe_unused]] std_srvs::Trigger::Request& req, 
       if (was_flying_[i]) {
 
         setCallbacks(i, false);
+        changeAltEstimator(i);
       }
     }
   }

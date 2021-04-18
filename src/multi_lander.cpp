@@ -826,8 +826,32 @@ bool MultiLander::callbackAll([[maybe_unused]] std_srvs::Trigger::Request& req, 
 
       if (was_flying_[i]) {
 
-        setCallbacks(i, false);
-        changeAltEstimator(i);
+        if (!setCallbacks(i, false)) {
+
+          ROS_ERROR("[MultiLander]: could not switch uav%d callbacks to off", int(i));
+
+          res.message = "could not switch all the UAVs' callbacks to off";
+          res.success = false;
+          return true;
+        }
+
+        if (!switchTracker(i)) {
+
+          ROS_ERROR("[MultiLander]: could not switch uav%d to %s", int(i), _tracker_.c_str());
+
+          res.message = "could not switch all the UAVs to desired tracker";
+          res.success = false;
+          return true;
+        }
+
+        if (!changeAltEstimator(i)) {
+
+          ROS_ERROR("[MultiLander]: could not switch uav%d %s estimator", int(i), _altitude_estimator_.c_str());
+
+          res.message = "could not switch all the UAVs to desired altitude estimator";
+          res.success = false;
+          return true;
+        }
       }
     }
   }

@@ -1,0 +1,15 @@
+name: multi_lander
+root: ./
+startup_window: multi_lander
+pre_window: export RUN_TYPE=uav; export UAV_NAME=klaxalk; export ROS_MASTER_URI=http://localhost:11311; export ROS_IP=127.0.0.1
+windows:
+  - nimbro:
+      layout: tiled
+      panes:
+        - waitForRos; roslaunch mrs_uav_general nimbro.launch custom_config:=./uav_names.yaml
+  - multi_lander:
+      layout: even-vertical
+      panes:
+        - "history -s rosservice call /klaxalk/multi_lander/land_all"
+        - "history -s rosservice call /klaxalk/multi_lander/land_one"
+        - waitForRos; roslaunch multi_lander multi_lander.launch

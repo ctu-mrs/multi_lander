@@ -3,6 +3,10 @@ root: ./
 startup_window: multi_lander
 pre_window: export RUN_TYPE=uav; export UAV_NAME=klaxalk; export ROS_MASTER_URI=http://localhost:11311; export ROS_IP=127.0.0.1
 windows:
+  - roscore:
+      layout: tiled
+      panes:
+        - roscore
   - nimbro:
       layout: tiled
       panes:

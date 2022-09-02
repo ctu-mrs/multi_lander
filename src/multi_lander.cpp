@@ -97,6 +97,7 @@ public:
   std::vector<mrs_lib::ServiceClientHandler<std_srvs::Trigger>> sch_land_home_;
   std::vector<mrs_lib::ServiceClientHandler<mrs_msgs::String>>  sch_switch_controller_;
   std::vector<mrs_lib::ServiceClientHandler<mrs_msgs::String>>  sch_switch_tracker_;
+  std::vector<mrs_lib::ServiceClientHandler<std_srvs::Trigger>> sch_ehover_;
   std::vector<mrs_lib::ServiceClientHandler<mrs_msgs::String>>  sch_set_constraints_;
   std::vector<mrs_lib::ServiceClientHandler<std_srvs::SetBool>> sch_enable_callbacks_;
   std::vector<mrs_lib::ServiceClientHandler<mrs_msgs::String>>  sch_change_alt_estimator_;
@@ -119,6 +120,7 @@ public:
   // routines
   bool                                      landHome(const int& id);
   bool                                      switchTracker(const int& id);
+  bool                                      ehover(const int id);
   bool                                      switchController(const int& id);
   bool                                      setConstraints(const int& id);
   bool                                      changeAltEstimator(const int& id);
@@ -170,6 +172,7 @@ void MultiLander::onInit() {
   std::string land_home_service;
   std::string switch_controller_service;
   std::string switch_tracker_service;
+  std::string ehover_service;
   std::string set_constraints_service;
   std::string enable_callbacks_service;
   std::string change_alt_estimator_service;
@@ -179,6 +182,7 @@ void MultiLander::onInit() {
   param_loader.loadParam("land_home_service", land_home_service);
   param_loader.loadParam("switch_controller_service", switch_controller_service);
   param_loader.loadParam("switch_tracker_service", switch_tracker_service);
+  param_loader.loadParam("ehover_service", ehover_service);
   param_loader.loadParam("set_constraints_service", set_constraints_service);
   param_loader.loadParam("enable_callbacks_service", enable_callbacks_service);
   param_loader.loadParam("change_alt_estimator_service", change_alt_estimator_service);
@@ -209,6 +213,7 @@ void MultiLander::onInit() {
     std::string land_home_full_service            = std::string("/") + name + std::string("/") + land_home_service;
     std::string switch_controller_full_service    = std::string("/") + name + std::string("/") + switch_controller_service;
     std::string switch_tracker_full_service       = std::string("/") + name + std::string("/") + switch_tracker_service;
+    std::string ehover_full_service               = std::string("/") + name + std::string("/") + ehover_service;
     std::string set_constraints_full_service      = std::string("/") + name + std::string("/") + set_constraints_service;
     std::string enable_callbacks_full_service     = std::string("/") + name + std::string("/") + enable_callbacks_service;
     std::string change_alt_estimator_full_service = std::string("/") + name + std::string("/") + change_alt_estimator_service;
@@ -227,6 +232,9 @@ void MultiLander::onInit() {
 
     ROS_INFO("[MultiLander]: hooking service to %s", switch_tracker_full_service.c_str());
     sch_switch_tracker_.push_back(mrs_lib::ServiceClientHandler<mrs_msgs::String>(nh_, switch_tracker_full_service));
+
+    ROS_INFO("[MultiLander]: hooking service to %s", ehover_full_service.c_str());
+    sch_ehover_.push_back(mrs_lib::ServiceClientHandler<std_srvs::Trigger>(nh_, ehover_full_service));
 
     ROS_INFO("[MultiLander]: hooking service to %s", set_constraints_full_service.c_str());
     sch_set_constraints_.push_back(mrs_lib::ServiceClientHandler<mrs_msgs::String>(nh_, set_constraints_full_service));
@@ -320,6 +328,17 @@ bool MultiLander::switchTracker(const int& id) {
   srv.request.value = _tracker_;
 
   return sch_switch_tracker_[id].call(srv, _service_n_attempts_, _service_repeat_delay_);
+}
+
+//}
+
+/* ehover() //{ */
+
+bool MultiLander::ehover(const int id) {
+
+  std_srvs::Trigger srv;
+
+  return sch_ehover_[id].call(srv, _service_n_attempts_, _service_repeat_delay_);
 }
 
 //}
@@ -831,6 +850,15 @@ bool MultiLander::callbackAll([[maybe_unused]] std_srvs::Trigger::Request& req, 
           ROS_ERROR("[MultiLander]: could not switch uav%d callbacks to off", int(i));
 
           res.message = "could not switch all the UAVs' callbacks to off";
+          res.success = false;
+          return true;
+        }
+
+        if (!ehover(i)) {
+
+          ROS_ERROR("[MultiLander]: could trigger ehover of uav%d", int(i));
+
+          res.message = "could not ehover all the UAVs";
           res.success = false;
           return true;
         }
